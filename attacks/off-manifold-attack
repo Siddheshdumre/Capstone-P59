@@ -1,0 +1,92 @@
+import pandas as pd
+import numpy as np
+import joblib
+import argparse
+import os
+
+def off_manifold_attack(model, X, scale=0.1):
+    """
+    Applies an off-manifold attack by adding Gaussian noise to the data.
+    
+    Args:
+        model: The trained black-box model pipeline.
+        X (pd.DataFrame): The input data to attack.
+        scale (float): The standard deviation of the noise to add.
+        
+    Returns:
+        pd.DataFrame: The attacked (perturbed) data.
+        np.ndarray: The model's predictions on the attacked data.
+        np.ndarray: The model's logits (or probabilities) on the attacked data.
+    """
+    # Select only numeric columns to apply noise to
+    numeric_cols = X.select_dtypes(include=np.number).columns.tolist()
+    X_attacked = X.copy()
+    
+    # Add Gaussian noise only to numeric columns
+    noise = np.random.normal(scale=scale, size=X_attacked[numeric_cols].shape)
+    X_attacked[numeric_cols] += noise
+    
+    print(f"Generated {len(X_attacked)} attacked samples.")
+    
+    # Get predictions and probabilities from the model
+    predictions = model.predict(X_attacked)
+    
+    # Get logits/probabilities
+    if hasattr(model, "predict_proba"):
+        logits = model.predict_proba(X_attacked)
+    else:
+        logits = model.predict(X_attacked)
+
+    return X_attacked, predictions, logits
+
+def main():
+    parser = argparse.ArgumentParser(description="Run an Off-Manifold attack on a model.")
+    parser.add_argument('--model_path', type=str, required=True, help='Path to the trained model .joblib file.')
+    parser.add_argument('--data_path', type=str, required=True, help='Path to the test data .csv file.')
+    parser.add_argument('--output_dir', type=str, required=True, help='Directory to save the attacked data and predictions.')
+    parser.add_argument('--scale', type=float, default=0.1, help='Scale of the Gaussian noise for the attack.')
+    args = parser.parse_args()
+
+    print(f"Loading model from {args.model_path}...")
+    model = joblib.load(args.model_path)
+    
+    print(f"Loading data from {args.data_path}...")
+    X_test = pd.read_csv(args.data_path)
+    
+    # --- FIX STARTS HERE ---
+    # Get the feature names that the model's preprocessor expects.
+    try:
+        model_feature_names = model.named_steps['preproc'].feature_names_in_
+        
+        # If the CSV file was saved with an index, it creates an 'Unnamed: 0' column. Remove it.
+        if 'Unnamed: 0' in X_test.columns:
+            X_test = X_test.drop(columns=['Unnamed: 0'])
+
+        # Force the dataframe's columns to match what the model expects.
+        if len(X_test.columns) == len(model_feature_names):
+            X_test.columns = model_feature_names
+        else:
+            raise ValueError(
+                f"Column count mismatch: Model expects {len(model_feature_names)} features, "
+                f"but data has {len(X_test.columns)} features."
+            )
+    except Exception as e:
+        print(f"Could not align columns, proceeding with caution. Error: {e}")
+    # --- FIX ENDS HERE ---
+    
+    print("Applying Off-Manifold attack...")
+    X_attacked, predictions, logits = off_manifold_attack(model, X_test, scale=args.scale)
+    
+    os.makedirs(args.output_dir, exist_ok=True)
+    
+    attacked_data_path = os.path.join(args.output_dir, 'attacked_data.csv')
+    predictions_path = os.path.join(args.output_dir, 'predictions.npz')
+    
+    X_attacked.to_csv(attacked_data_path, index=False)
+    np.savez(predictions_path, preds=predictions, logits=logits)
+    
+    print(f"✅ Attack complete. Results saved in {args.output_dir}")
+
+if __name__ == '__main__':
+    main()
+

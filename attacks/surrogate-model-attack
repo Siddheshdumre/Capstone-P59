@@ -1,0 +1,116 @@
+import pandas as pd
+import numpy as np
+import joblib
+import argparse
+import os
+from sklearn.tree import DecisionTreeClassifier
+from art.estimators.classification import SklearnClassifier
+from art.attacks.evasion import DecisionTreeAttack
+
+def surrogate_attack(model, X):
+    """
+    Performs a surrogate model attack using the ART library.
+    
+    Args:
+        model: The trained black-box model pipeline.
+        X (pd.DataFrame): The input data to attack.
+        
+    Returns:
+        pd.DataFrame: The attacked (perturbed) data.
+        np.ndarray: The model's predictions on the attacked data.
+        np.ndarray: The model's logits (or probabilities) on the attacked data.
+    """
+    if hasattr(model, 'named_steps') and 'preproc' in model.named_steps:
+        preprocessor = model.named_steps['preproc']
+        X_processed = preprocessor.transform(X)
+    else:
+        X_processed = X.values
+
+    # Step 1: Train a surrogate model (e.g., Decision Tree) on the black box's predictions
+    surrogate_model = DecisionTreeClassifier()
+    black_box_predictions = model.predict(X)
+    surrogate_model.fit(X_processed, black_box_predictions)
+
+    # Step 2: Use the surrogate to craft adversarial examples
+    art_classifier = SklearnClassifier(model=surrogate_model)
+    attack = DecisionTreeAttack(classifier=art_classifier)
+    
+    print("Generating adversarial samples...")
+    # Generate attacks on a subset to speed things up for this project
+    subset_size = 100
+    X_processed_subset = X_processed[:subset_size]
+    X_attacked_processed = attack.generate(x=X_processed_subset)
+
+    # Create a copy of the original data to modify
+    X_attacked = X.copy()
+
+    # Step 3: Try to convert the attacked data back to the original feature space
+    if hasattr(model, 'named_steps') and 'preproc' in model.named_steps and hasattr(preprocessor, 'inverse_transform'):
+        try:
+            X_attacked_inv = preprocessor.inverse_transform(X_attacked_processed)
+            # Create a dataframe from the inverted subset
+            X_attacked_subset_df = pd.DataFrame(X_attacked_inv, columns=X.columns, index=X.index[:subset_size])
+            # Update the main dataframe with the attacked subset
+            X_attacked.update(X_attacked_subset_df)
+
+        except Exception as e:
+            print(f"⚠️ Warning: Inverse transform failed ({e}). Perturbations may not be fully reflected.")
+    else:
+        print("⚠️ Warning: Preprocessor does not support inverse_transform.")
+
+    # Get final predictions from the original model
+    predictions = model.predict(X_attacked)
+    logits = model.predict_proba(X_attacked)
+    
+    return X_attacked, predictions, logits
+
+def main():
+    parser = argparse.ArgumentParser(description="Run a Surrogate Model attack.")
+    parser.add_argument('--model_path', type=str, required=True, help='Path to the trained model .joblib file.')
+    parser.add_argument('--data_path', type=str, required=True, help='Path to the test data .csv file.')
+    parser.add_argument('--output_dir', type=str, required=True, help='Directory to save the attacked data and predictions.')
+    args = parser.parse_args()
+
+    print(f"Loading model from {args.model_path}...")
+    model = joblib.load(args.model_path)
+    
+    print(f"Loading data from {args.data_path}...")
+    X_test = pd.read_csv(args.data_path)
+    
+    # --- FIX STARTS HERE ---
+    # Get the feature names that the model's preprocessor expects.
+    try:
+        model_feature_names = model.named_steps['preproc'].feature_names_in_
+        
+        # If the CSV file was saved with an index, it creates an 'Unnamed: 0' column. Remove it.
+        if 'Unnamed: 0' in X_test.columns:
+            X_test = X_test.drop(columns=['Unnamed: 0'])
+
+        # Force the dataframe's columns to match what the model expects.
+        if len(X_test.columns) == len(model_feature_names):
+            X_test.columns = model_feature_names
+        else:
+            raise ValueError(
+                f"Column count mismatch: Model expects {len(model_feature_names)} features, "
+                f"but data has {len(X_test.columns)} features."
+            )
+    except Exception as e:
+        print(f"Could not align columns, proceeding with caution. Error: {e}")
+    # --- FIX ENDS HERE ---
+
+    print("Applying Surrogate attack...")
+    X_attacked, predictions, logits = surrogate_attack(model, X_test)
+    
+    os.makedirs(args.output_dir, exist_ok=True)
+    
+    attacked_data_path = os.path.join(args.output_dir, 'attacked_data.csv')
+    predictions_path = os.path.join(args.output_dir, 'predictions.npz')
+    
+    X_attacked.to_csv(attacked_data_path, index=False)
+    np.savez(predictions_path, preds=predictions, logits=logits)
+    
+    print(f"✅ Attack complete. Results saved in {args.output_dir}")
+
+if __name__ == '__main__':
+    main()
+
