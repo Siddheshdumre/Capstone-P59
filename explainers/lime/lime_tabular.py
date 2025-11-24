@@ -15,13 +15,13 @@ from sklearn.utils import check_random_state
 #from pyDOE2 import lhs
 from scipy.stats.distributions import norm
 
-from src.proposed.explainers.lime.discretize import QuartileDiscretizer
-from src.proposed.explainers.lime.discretize import DecileDiscretizer
-from src.proposed.explainers.lime.discretize import EntropyDiscretizer
-from src.proposed.explainers.lime.discretize import BaseDiscretizer
-from src.proposed.explainers.lime.discretize import StatsDiscretizer
-from src.proposed.explainers.lime import explanation
-from src.proposed.explainers.lime import lime_base
+from explainers.lime.discretize import QuartileDiscretizer
+from explainers.lime.discretize import DecileDiscretizer
+from explainers.lime.discretize import EntropyDiscretizer
+from explainers.lime.discretize import BaseDiscretizer
+from explainers.lime.discretize import StatsDiscretizer
+from explainers.lime import explanation
+from explainers.lime import lime_base
 
 
 class TableDomainMapper(explanation.DomainMapper):
