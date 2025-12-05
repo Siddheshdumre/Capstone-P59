@@ -120,12 +120,19 @@ class IDLimeWrapper:
             k,
             feature_selection=feature_selection,
         )
-        if isinstance(result, tuple):
-            explanation = result[0]
-        else:
-            explanation = result
 
-        return explanation
+        if hasattr(result, "as_map"):
+            return result
+
+        if isinstance(result, tuple) and hasattr(result[0], "as_map"):
+            return result[0]
+
+        return self.base_lime.explain_instance(
+            x,
+            self._predict_proba,
+            num_features=k
+        )
+
 
 class IDKernelShap:
     """
